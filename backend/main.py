@@ -1,13 +1,16 @@
 from datetime import datetime, timedelta
 from typing import Dict, Optional, List
 
-from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile, status
+from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile, status, Body
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from jose import JWTError, jwt
 from passlib.context import CryptContext
 from pydantic import BaseModel
 from uuid import uuid4
+
+from . import api_clients, firebase_auth, payment
+from .config import settings
 
 app = FastAPI()
 
@@ -63,8 +66,20 @@ class Trip(BaseModel):
     plan: str
     owner: str
 
+
+class Preference(BaseModel):
+    budget: Optional[str] = None
+    accommodation: Optional[str] = None
+    dietary: Optional[str] = None
+
+
+class Lead(BaseModel):
+    vendor: str
+    details: str
+
 users_db: Dict[str, User] = {}
 trips_db: Dict[str, Trip] = {}
+leads_db: List[Lead] = []
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     return pwd_context.verify(plain_password, hashed_password)
@@ -161,19 +176,30 @@ async def read_users_me(current_user: User = Depends(get_current_user)):
     )
 
 
-def generate_trip_plan(destination: str, start_date: str, days: int) -> str:
-    return (
-        f"Trip to {destination} starting {start_date} for {days} days."
-        f" Enjoy sightseeing and local cuisine!"
+def generate_trip_plan(destination: str, start_date: str, days: int, pref: Preference | None = None) -> str:
+    """Generate a simple itinerary string."""
+    details = (
+        f"Trip to {destination} starting {start_date} for {days} days. "
+        f"Enjoy sightseeing and local cuisine!"
     )
+    if pref:
+        if pref.budget:
+            details += f" Budget level: {pref.budget}."
+        if pref.accommodation:
+            details += f" Stay in {pref.accommodation}."
+        if pref.dietary:
+            details += f" Dietary pref: {pref.dietary}."
+    return details
 
 
 @app.post("/trip", response_model=Trip)
 async def create_trip(
-    trip: TripCreate, current_user: User = Depends(get_current_user)
+    trip: TripCreate,
+    pref: Preference | None = Body(None),
+    current_user: User = Depends(get_current_user),
 ):
     trip_id = str(uuid4())
-    plan = generate_trip_plan(trip.destination, trip.start_date, trip.days)
+    plan = generate_trip_plan(trip.destination, trip.start_date, trip.days, pref)
     new_trip = Trip(
         id=trip_id,
         destination=trip.destination,
@@ -184,6 +210,83 @@ async def create_trip(
     )
     trips_db[trip_id] = new_trip
     return new_trip
+
+
+@app.get("/search/flights")
+async def flights_search(origin: str, destination: str, date: str):
+    return await api_clients.search_flights(origin, destination, date)
+
+
+@app.get("/search/hotels")
+async def hotels_search(location: str, check_in: str, check_out: str):
+    return await api_clients.search_hotels(location, check_in, check_out)
+
+
+@app.get("/search/cars")
+async def cars_search(location: str, date: str):
+    return await api_clients.search_cars(location, date)
+
+
+@app.get("/search/restaurants")
+async def restaurants_search(location: str):
+    return await api_clients.search_restaurants(location)
+
+
+@app.get("/ride/estimate")
+async def ride_estimate(pickup: str, dropoff: str):
+    return await api_clients.get_ride_estimate(pickup, dropoff)
+
+
+@app.post("/itinerary")
+async def generate_itinerary(
+    destination: str,
+    start_date: str,
+    days: int,
+    pref: Preference | None = Body(None),
+):
+    return {"itinerary": generate_trip_plan(destination, start_date, days, pref)}
+
+
+class PaymentRequest(BaseModel):
+    amount_cents: int
+    currency: str = "usd"
+    metadata: Optional[Dict[str, str]] = None
+
+
+@app.post("/payments/checkout")
+async def payments_checkout(req: PaymentRequest):
+    return payment.create_checkout_session(req.amount_cents, req.currency, req.metadata)
+
+
+class FirebaseLogin(BaseModel):
+    id_token: str
+
+
+@app.post("/auth/firebase", response_model=Token)
+async def firebase_login(data: FirebaseLogin):
+    claims = firebase_auth.verify_firebase_token(data.id_token)
+    if not claims:
+        raise HTTPException(status_code=400, detail="Invalid Firebase token")
+    username = claims.get("uid")
+    if username not in users_db:
+        users_db[username] = User(
+            fullName=username,
+            dob="",
+            email=claims.get("email"),
+            mobile=None,
+            country="",
+            hashed_password=get_password_hash(uuid4().hex),
+        )
+    access_token = create_access_token(data={"sub": username})
+    return {"access_token": access_token, "token_type": "bearer"}
+
+
+@app.post("/lead")
+async def create_lead(
+    lead: Lead, current_user: User = Depends(get_current_user)
+):
+    leads_db.append(lead)
+    return {"status": "received"}
 
 
 @app.get("/trips", response_model=List[Trip])
