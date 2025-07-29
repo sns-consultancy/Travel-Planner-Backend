@@ -7,6 +7,11 @@ from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from jose import JWTError, jwt
 from passlib.context import CryptContext
 from pydantic import BaseModel
+from backend.clients.flights import Flight, search_flights
+from backend.clients.hotels import Hotel, search_hotels
+from backend.clients.cars import CarRental, search_car_rentals
+from backend.clients.restaurants import Restaurant, search_restaurants
+from backend.clients.rides import RideEstimate, get_ride_estimate
 from uuid import uuid4
 
 app = FastAPI()
@@ -197,3 +202,36 @@ async def get_trip(trip_id: str, current_user: User = Depends(get_current_user))
     if not trip or trip.owner != current_user.fullName:
         raise HTTPException(status_code=404, detail="Trip not found")
     return trip
+
+
+# ----- Placeholder third-party integration endpoints -----
+
+
+@app.get("/flights", response_model=List[Flight])
+async def list_flights(origin: str, destination: str, date: str):
+    """Return example flights between two destinations."""
+    return search_flights(origin, destination, date)
+
+
+@app.get("/hotels", response_model=List[Hotel])
+async def list_hotels(destination: str, check_in: str, nights: int):
+    """Return example hotels for a destination."""
+    return search_hotels(destination, check_in, nights)
+
+
+@app.get("/cars", response_model=List[CarRental])
+async def list_car_rentals(location: str, start_date: str, days: int):
+    """Return example car rental options."""
+    return search_car_rentals(location, start_date, days)
+
+
+@app.get("/restaurants", response_model=List[Restaurant])
+async def list_restaurants(location: str):
+    """Return example restaurants for a location."""
+    return search_restaurants(location)
+
+
+@app.get("/ride-estimate", response_model=RideEstimate)
+async def ride_estimate(pickup: str, dropoff: str):
+    """Return an example ride estimate between two points."""
+    return get_ride_estimate(pickup, dropoff)
