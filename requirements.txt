@@ -3,3 +3,6 @@ uvicorn
 pydantic
 passlib[bcrypt]
 python-jose[cryptography]
+stripe
+firebase-admin
+httpx
