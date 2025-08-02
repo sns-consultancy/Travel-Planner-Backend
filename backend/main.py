@@ -1,9 +1,9 @@
 from datetime import datetime, timedelta
 from typing import Dict, Optional, List
 
-from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile, status, Body
+from fastapi import Depends, FastAPI, HTTPException, status, Body
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
 from passlib.context import CryptContext
 from pydantic import BaseModel
@@ -45,6 +45,18 @@ class User(BaseModel):
     country: str
     hashed_password: str
 
+
+class UserRegister(BaseModel):
+    fullName: str
+    dob: str
+    email: Optional[str] = None
+    mobile: Optional[str] = None
+    country: str
+    password: str
+    confirmPassword: str
+    consentGmail: Optional[bool] = False
+    consentPhone: Optional[bool] = False
+
 class UserOut(BaseModel):
     fullName: str
     dob: str
@@ -55,6 +67,11 @@ class UserOut(BaseModel):
 class Token(BaseModel):
     access_token: str
     token_type: str
+
+
+class LoginInput(BaseModel):
+    username: str
+    password: str
 
 
 class TripCreate(BaseModel):
@@ -133,37 +150,26 @@ async def generate_plan(data: Destination):
 
 
 @app.post("/register")
-async def register_user(
-    fullName: str = Form(...),
-    dob: str = Form(...),
-    email: str = Form(None),
-    mobile: str = Form(None),
-    country: str = Form(...),
-    password: str = Form(...),
-    confirmPassword: str = Form(...),
-    profilePhoto: Optional[UploadFile] = File(None),
-    consentGmail: Optional[bool] = Form(False),
-    consentPhone: Optional[bool] = Form(False),
-):
-    if password != confirmPassword:
+async def register_user(user: UserRegister):
+    if user.password != user.confirmPassword:
         raise HTTPException(status_code=400, detail="Passwords do not match")
-    if fullName in users_db:
+    if user.fullName in users_db:
         raise HTTPException(status_code=400, detail="User already exists")
-    hashed_password = get_password_hash(password)
-    users_db[fullName] = User(
-        fullName=fullName,
-        dob=dob,
-        email=email,
-        mobile=mobile,
-        country=country,
+    hashed_password = get_password_hash(user.password)
+    users_db[user.fullName] = User(
+        fullName=user.fullName,
+        dob=user.dob,
+        email=user.email,
+        mobile=user.mobile,
+        country=user.country,
         hashed_password=hashed_password,
     )
-    return {"message": f"User {fullName} registered successfully."}
+    return {"message": f"User {user.fullName} registered successfully."}
 
 
 @app.post("/token", response_model=Token)
-async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends()):
-    user = authenticate_user(form_data.username, form_data.password)
+async def login_for_access_token(data: LoginInput):
+    user = authenticate_user(data.username, data.password)
     if not user:
         raise HTTPException(status_code=400, detail="Incorrect username or password")
     access_token = create_access_token(data={"sub": user.fullName})
@@ -228,7 +234,28 @@ async def hotels_search(location: str, check_in: str, check_out: str):
 
 
 @app.get("/search/cars")
-async def cars_search(location: str, date: str):
+async def cars_search(
+    date: str,
+    location: str | None = None,
+    use_current_location: bool = False,
+    lat: float | None = None,
+    lon: float | None = None,
+):
+    """Search car rentals by explicit or current location.
+
+    If ``use_current_location`` is true the client must supply ``lat`` and ``lon``
+    coordinates which will be used as the search location. Otherwise ``location``
+    must be provided.
+    """
+    if use_current_location:
+        if lat is None or lon is None:
+            raise HTTPException(
+                status_code=400,
+                detail="Latitude and longitude required when using current location",
+            )
+        location = f"{lat},{lon}"
+    if not location:
+        raise HTTPException(status_code=400, detail="Location is required")
     return await api_clients.search_cars(location, date)
 
 
