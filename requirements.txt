@@ -6,3 +6,4 @@ python-jose[cryptography]
 stripe
 firebase-admin
 httpx
+pytest
